@@ -114,31 +114,31 @@ URL=<alb-url>
 ### List existing keys:
  
 ```
- $ curl $URL/xml/listKeys
+curl $URL/xml/listKeys
 ```
 
 ### Create keys:
 
 ```
- $ curl --data "@run/certdata.json" $URL/xml/create/<my-key-label> -X POST -H "Content-Type: text/plain"
+curl --data "@run/certdata.json" $URL/xml/create/<my-key-label> -X POST -H "Content-Type: text/plain"
 ```
 
 ### Sign XML Document
 
 ```
- $ curl --data "@run/sample.xml" $URL/xml/sign/<my-key-label> -X POST -H "Content-Type: application/xml"
+curl --data "@run/sample.xml" $URL/xml/sign/<my-key-label> -X POST -H "Content-Type: application/xml"
 ```
 
 ### Sign and Embed Certificate
 
 ```
- $ curl --data "@run/sample.xml" $URL/xml/sign-cert/<my-key-label> -X POST -H "Content-Type: application/xml"
+curl --data "@run/sample.xml" $URL/xml/sign-cert/<my-key-label> -X POST -H "Content-Type: application/xml"
 ```
 
 ### Validate Signed Document
 
 ```
- $ curl --data "@run/<your-signed-xml>" <alb-url>/xml/validate -X POST -H "Content-Type: application/xml"
+ url --data "@run/<your-signed-xml>" <alb-url>/xml/validate -X POST -H "Content-Type: application/xml"
 ```
 
 ### Delete a key in the HSM

@@ -1,0 +1,242 @@
+###
+ # Copyright 2011-2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ #
+ # Licensed under the Apache License, Version 2.0 (the "License").
+ # You may not use this file except in compliance with the License.
+ # A copy of the License is located at
+ #
+ #  http://aws.amazon.com/apache2.0
+ #
+ # or in the "license" file accompanying this file. This file is distributed
+ # on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
+ # express or implied. See the License for the specific language governing
+ # permissions and limitations under the License.
+ #
+# This script builds the xmlsigner container and configures the CloudHSM users
+# necessary for executing the basic operations. ALB uses two public subnets. 
+#
+# All the necessary roles and IAM Policies for services are also included.
+#
+# The final setup of the CloudHSM is done in Code Build (user creation)
+# Author: Luiz Decaro (lddecaro@amazon.com)
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  ECRRepositoryName:
+    Type: String
+    Description: The name of your ECR Repository
+    Default: xmlsigner
+  HSMPartition:
+    Type: String
+    Description: The HSM Partition you want your service to use
+    Default: PARTITION_1
+  HSMUser:
+    Type: String
+    Description: >-
+      The user of your HSM. Your service will authenticate in the HSM using this
+      username
+  HSMPassword:
+    Type: String
+    Description: >-
+      The password of your HSM. Your service will authenticate in the HSM using
+      this credential
+    NoEcho: true
+  HSMIP:
+    Type: String
+    Description: The IP of your HSM instance
+    
+Metadata:
+  'AWS::CloudFormation::Designer':
+    c0480a59-4d30-4e56-bdbf-c32a2c2adaaa:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 450
+        'y': 90
+      z: 1
+      embeds: []
+      dependson:
+        - d2563c0c-0721-41db-94e1-0c4169cdcb24
+    4e94d78a-78b6-47b3-8551-c69fb559bffd:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 780
+        'y': 210
+      z: 1
+      embeds: []
+    d2563c0c-0721-41db-94e1-0c4169cdcb24:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 540
+        'y': 30
+      z: 1
+      embeds: []
+    c0fd1041-4b13-412e-b2a7-cc35cb036379:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 60
+        'y': 90
+      z: 1
+      embeds: []
+Resources:
+  XMLSignerBuild:
+    Type: 'AWS::CodeBuild::Project'
+    Properties:
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Description: This is the sample build process of the xmlsigner project
+      Name: xmlsigner
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        ImagePullCredentialsType: CODEBUILD
+        PrivilegedMode: true
+        Image: 'aws/codebuild/amazonlinux2-x86_64-standard:1.0-1.0.0'
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: HSM_IP
+            Value: !Ref HSMIP
+            Type: PLAINTEXT
+          - Name: HSM_USER
+            Value: !Ref HSMUser
+            Type: PLAINTEXT
+          - Name: HSM_PARTITION
+            Value: !Ref HSMPartition
+            Type: PLAINTEXT
+          - Name: REPOSITORY_URI
+            Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/'
+            Type: PLAINTEXT
+          - Name: REPOSITORY_NAME
+            Value: !Ref XMLSignerRepository
+            Type: PLAINTEXT
+          - Name: HSM_PASSWORD
+            Value: /CodeBuild/HSM_PWD
+            Type: PARAMETER_STORE
+          - Name: HSM_CUST_CERTIFICATE
+            Value: /CodeBuild/CUST_CERTIFICATE
+            Type: PARAMETER_STORE
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+      VpcConfig:
+        VpcId: !ImportValue SignerVPCId
+        Subnets:
+          - !ImportValue SignerPrivateSubnet
+        SecurityGroupIds:
+          - !ImportValue SignerFargateContainerSecurityGroup
+      QueuedTimeoutInMinutes: 480
+      Source:
+        Auth:
+          Type: OAUTH
+        GitCloneDepth: 0
+        Type: GITHUB
+        Location: 'https://github.com/ldecaro/xmlsigner'
+        InsecureSsl: false
+        ReportBuildStatus: false
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: c0480a59-4d30-4e56-bdbf-c32a2c2adaaa
+    DependsOn:
+      - HSMPass
+  CodeBuildServiceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub 'XMLSignerCodeBuildRole-${AWS::StackName}'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /service-role/
+      Policies:
+        - PolicyName: XMLSignerCodeBuildPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource:
+                  - !Sub >-
+                    arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/xmlsigner
+                  - !Sub >-
+                    arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/xmlsigner:*
+              - Effect: Allow
+                Action:
+                  - 'ssm:GetParameters'
+                Resource:
+                  - !Sub >-
+                    arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/CodeBuild/*
+              - Effect: Allow
+                Action:
+                  - 'ec2:CreateNetworkInterface'
+                  - 'ec2:DescribeDhcpOptions'
+                  - 'ec2:DescribeNetworkInterfaces'
+                  - 'ec2:DeleteNetworkInterface'
+                  - 'ec2:DescribeSubnets'
+                  - 'ec2:DescribeSecurityGroups'
+                  - 'ec2:DescribeVpcs'
+                Resource:
+                  - '*'
+              - Effect: Allow
+                Action:
+                  - 'ec2:CreateNetworkInterfacePermission'
+                Resource:
+                  - !Sub >-
+                    arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:network-interface/*
+              - Effect: Allow
+                Action:
+                  - 'ecr:GetAuthorizationToken'
+                Resource:
+                  - '*'
+              - Effect: Allow
+                Action:
+                  - 'ecr:BatchCheckLayerAvailability'
+                  - 'ecr:GetDownloadUrlForLayer'
+                  - 'ecr:BatchGetImage'
+                  - 'ecr:PutImage'
+                  - 'ecr:InitiateLayerUpload'
+                  - 'ecr:UploadLayerPart'
+                  - 'ecr:CompleteLayerUpload'
+                Resource:
+                  - !GetAtt XMLSignerRepository.Arn
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: c0fd1041-4b13-412e-b2a7-cc35cb036379
+  XMLSignerRepository:
+    Type: 'AWS::ECR::Repository'
+    Properties:
+      RepositoryName: !Ref ECRRepositoryName
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 4e94d78a-78b6-47b3-8551-c69fb559bffd
+  HSMPass:
+    Type: 'AWS::SSM::Parameter'
+    Properties:
+      Description: >-
+        This is the Cloud HSM Password used during the Code Build Job that
+        creates the XMLSigner container
+      Name: /CodeBuild/HSM_PWD
+      Type: String
+      Value: !Ref HSMPassword
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: d2563c0c-0721-41db-94e1-0c4169cdcb24
+Outputs:
+   ECRRepositoryName:
+      Description: ECR Repository to build this container
+      Value: !Ref ECRRepositoryName
+      Export:
+        Name: ECRRepositoryName
