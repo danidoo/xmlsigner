@@ -1,0 +1,1039 @@
+###
+ # Copyright 2011-2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ #
+ # Licensed under the Apache License, Version 2.0 (the "License").
+ # You may not use this file except in compliance with the License.
+ # A copy of the License is located at
+ #
+ #  http://aws.amazon.com/apache2.0
+ #
+ # or in the "license" file accompanying this file. This file is distributed
+ # on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
+ # express or implied. See the License for the specific language governing
+ # permissions and limitations under the License.
+ #
+# This script creates a VPC, 3 Subnets (2 Public and 1 Private), Security Groups
+# for public subnets, security group for private subnet, EIP, NAT Gateway, private
+# and public route tables, Cloud HSM and initializes the CloudHSM Cluster using a
+# Step Function (Credits: initial version of the step function that was taken from
+# https://github.com/aws-samples/aws-reinvent2018-keeping-secrets).
+# All the necessary roles and IAM Policies for services are also included.
+#
+# The final setup of the CloudHSM is done in Code Build (user creation)
+# Author: Luiz Decaro (lddecaro@amazon.com)
+AWSTemplateFormatVersion: 2010-09-09
+Description: Template to Create CloudHSMv2 Cluster and initialize it
+Resources:
+  VPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      CidrBlock: !Ref CIDRNetworkHSM
+      Tags:
+        - Key: Name
+          Value: signer
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+  PublicSubnetOne:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone:
+        'Fn::Select':
+          - 0
+          - 'Fn::GetAZs':
+              Ref: 'AWS::Region'
+      VpcId: !Ref VPC
+      CidrBlock: !Ref CIDRPublicSubnetHSM
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: signer-public
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: bdf5413a-9d2e-4ac3-96db-457c7cd67da2
+  PublicSubnetTwo: 
+    Type: 'AWS::EC2::Subnet' 
+    Properties: 
+      AvailabilityZone: 
+        'Fn::Select': 
+          - 1 
+          - 'Fn::GetAZs': 
+              Ref: 'AWS::Region' 
+      VpcId: !Ref VPC 
+      CidrBlock: !Ref CIDRPublicSubnet2HSM 
+      MapPublicIpOnLaunch: true 
+      Tags:
+        - Key: Name
+          Value: signer-public2
+    Metadata: 
+      'AWS::CloudFormation::Designer': 
+        id: ad635758-84b6-45bc-8dac-9b955595f2d3 
+  PrivateSubnet:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref CIDRPrivateSubnetHSM
+      Tags:
+        - Key: Name
+          Value: signer-priv
+      AvailabilityZone: !FindInMap [RegionMap, !Ref "AWS::Region", !Ref PrivateSubnetAZ]
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: b4fc91b4-55fd-426d-a4bd-3a52961a995f
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 3837cbcf-4d68-48be-bc9a-9d1fe7d62b2f
+  GatewayAttachement:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: d1516997-cc1e-4d41-ac4a-9d756f9dfa71
+  PrivateRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: signer-private
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 5cfcccf2-3438-4be3-9271-2993826f1af7
+  PublicAccessRoute:
+    Type: 'AWS::EC2::Route'
+    DependsOn: NATGateway
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: a76b0d86-228e-42f4-a0a2-3b03a271c8c1
+  PrivateSubnetRouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: f8d39cec-0141-4847-b55b-019ac01b1f32
+  PublicRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: signer-public      
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 857c6b84-8319-406f-8f39-d23f02b0576f
+  PublicRoute:
+    Type: 'AWS::EC2::Route'
+    DependsOn:
+      - GatewayAttachement
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 48950cdd-dbe4-4611-996d-2af3cce33d27
+  PublicSubnetOneRouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PublicSubnetOne
+      RouteTableId: !Ref PublicRouteTable
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 565851de-a56b-4ef3-b8ba-00c2e4610bb0
+  PublicSubnetTwoRouteTableAssociation: 
+    Type: 'AWS::EC2::SubnetRouteTableAssociation' 
+    Properties: 
+      SubnetId: !Ref PublicSubnetTwo 
+      RouteTableId: !Ref PublicRouteTable 
+    Metadata: 
+      'AWS::CloudFormation::Designer': 
+        id: 776dc5b7-ee14-450a-9336-7750acbfa48
+  FargateContainerSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Access to the Fargate containers
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: signer-ecs-sg
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 15e77198-7be1-4800-bde2-9fbb5dfe30dc        
+  NATGateway:
+    Type: 'AWS::EC2::NatGateway'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: signer-private     
+      AllocationId:
+        'Fn::GetAtt':
+          - EIP
+          - AllocationId
+      SubnetId: !Ref PublicSubnetOne
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 9e102f05-102f-4fef-b5e8-705bc4aaf90a
+  EIP:
+    DependsOn: GatewayAttachement
+    Type: 'AWS::EC2::EIP'
+    Properties:
+      Domain: vpc
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: e80f378e-e009-404c-8dc1-66ea8922c2ac
+#Cloud HSM Installation
+  LambdaExecutionRoleForCloudHSM:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: CloudhsmPowerUser
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: 'arn:aws:logs:*:*:*'
+              - Effect: Allow
+                Action:
+                  - 'cloudhsm:DescribeClusters'
+                  - 'cloudhsm:CreateCluster'
+                  - 'cloudhsm:CreateHsm'
+                  - 'cloudhsm:InitializeCluster'
+                  - 'cloudhsm:ListTags'
+                  - 'cloudhsm:TagResource'
+                  - 'cloudhsm:UntagResource'
+                  - 'ec2:CreateNetworkInterface'
+                  - 'ec2:DescribeNetworkInterfaces'
+                  - 'ec2:DescribeNetworkInterfaceAttribute'
+                  - 'ec2:DetachNetworkInterface'
+                  - 'ec2:DeleteNetworkInterface'
+                  - 'ec2:CreateSecurityGroup'
+                  - 'ec2:AuthorizeSecurityGroupIngress'
+                  - 'ec2:AuthorizeSecurityGroupEgress'
+                  - 'ec2:RevokeSecurityGroupEgress'
+                  - 'ec2:DescribeSecurityGroups'
+                  - 'ec2:DeleteSecurityGroup'
+                  - 'ec2:CreateTags'
+                  - 'ec2:DescribeVpcs'
+                  - 'ec2:DescribeSubnets'
+                  - 'states:StartExecution'
+                  - 'iam:CreateServiceLinkedRole'
+                  - 'ssm:PutParameter'
+                  - 'ssm:SendCommand'
+                Resource: '*'
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 6104ac5c-cfc8-46a7-ad5e-e81be1625bfa
+  CreateCluster:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt
+        - LambdaExecutionRoleForCloudHSM
+        - Arn
+      Code:
+        ZipFile: |
+            """" Lambda to Create CloudHSMv2 Cluster """
+            import boto3, json, time
+
+            def lambda_handler(event, context):
+                region = event['Region']  # region to launch Cluster #
+                subnet1 = event['Subnet1']
+ 
+                sg_b    = event['SG']
+
+
+                cloudhsmv2 = boto3.client('cloudhsmv2', region_name=region)
+                cluster = cloudhsmv2.create_cluster(SubnetIds=[subnet1],HsmType='hsm1.medium')
+                print "New Cluster created."
+                cluster_id = cluster['Cluster']['ClusterId']
+                print cluster_id
+
+                time.sleep(5)
+
+                ec2 = boto3.client('ec2')
+                #connection = ec2.connect_to_region=REGION
+                sg = ec2.describe_security_groups(    Filters=[
+                    {
+                        'Name': 'egress.ip-permission.from-port',
+                        'Values': [
+                            '2223',
+                        ]
+                    },
+                ])
+                for securityGroup in sg['SecurityGroups']:
+                    print securityGroup['GroupId']
+                    try:
+                        ec2.authorize_security_group_ingress(GroupId=securityGroup['GroupId'],IpPermissions=[{'IpProtocol': 'tcp','FromPort': 2223, 'ToPort': 2225, 'UserIdGroupPairs': [{ 'GroupId': sg_b }]}])
+                    except:
+                        pass
+                return cluster_id
+      Runtime: python2.7
+      Timeout: '300'
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 7978b197-c46d-47a8-ad4c-022499ccbc3e
+  DescribeClusters:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt
+        - LambdaExecutionRoleForCloudHSM
+        - Arn
+      Code:
+        ZipFile: |
+          """" Lambda to Check CloudHSMv2 Cluster status """
+          import boto3, json
+          def lambda_handler(event, context):
+              region = event['Region']  
+              clusterId = event['Cluster_Id']
+               ##
+              cloudhsmv2 = boto3.client('cloudhsmv2', region_name=region)
+               ##
+              try:
+                  # Call Describe Cluster
+                  cluster_data = cloudhsmv2.describe_clusters(Filters={'clusterIds': [clusterId]})
+                  cluster_status = cluster_data['Clusters'][0]['State']
+                  availablity_zones = cluster_data['Clusters'][0]['SubnetMapping'].keys()
+                  security_group = cluster_data['Clusters'][0]['SecurityGroup']
+
+                  #Check if there HSM in the cluster to json parsing error
+                  hsms = cluster_data['Clusters'][0]['Hsms']
+                  if not hsms:
+                      hsm_status = 'None'
+                      hsm_ip = 'None'
+                  else:
+                      hsm_status = cluster_data['Clusters'][0]['Hsms'][0]['State']
+                      hsm_ip = cluster_data['Clusters'][0]['Hsms'][0]['EniIp']
+
+                  # Log response from Cluster
+                  print "Cluster Status:", cluster_status
+                  print "AZ1:", availablity_zones[0]
+                  print "Cluster Security Group:", security_group
+                  print "HSM IP;", hsm_ip
+                  print "HSM Status:", hsm_status
+
+                  # Return the Status
+                  #return cluster_status
+                  return {'Cluster_Id': clusterId, 'Cluster_Status' : cluster_status, 'Hsm_Status' : hsm_status, 'AZ1':availablity_zones[0], 'Hsm_Ip' : hsm_ip, 'Security_Group': security_group}
+
+              except Exception as e:
+                  print(e)
+                  message = 'Error getting Cluster Status'
+                  print(message)
+                  raise Exception(message)
+      Runtime: python2.7
+      Timeout: '3'
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 2c7938e0-95bc-4c74-9a37-2d9e0c93a174
+  CreateHSM:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt
+        - LambdaExecutionRoleForCloudHSM
+        - Arn
+      Code:
+        ZipFile: |
+          """" Lambda to Create CloudHSMv2 Cluster """
+          import boto3, json
+
+          def lambda_handler(event, context):
+              region = event['Region']
+              clusterId = event['Cluster_Id']
+              AZ1 = event['Cluster_Output']['AZ1']
+
+              cloudhsmv2 = boto3.client('cloudhsmv2', region_name=region)
+              hsm_id = (cloudhsmv2.create_hsm(ClusterId=clusterId,AvailabilityZone=AZ1))['Hsm']['HsmId']
+              print "New HSM " + hsm_id + " created"
+              hsm_status = (cloudhsmv2.describe_clusters(Filters={'clusterIds': [clusterId]}))['Clusters'][0]['Hsms'][0]['State']
+              print hsm_status
+
+              return hsm_status
+      Runtime: python2.7
+      Timeout: '3'
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: c6f6d38f-84a3-48af-b574-2b97d42077a4
+  InitializeCluster:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt
+        - LambdaExecutionRoleForCloudHSM
+        - Arn
+      Code:
+        ZipFile: |
+          const exec = require('child_process').exec;
+          const fs = require("fs");
+          process.env.HOME = /tmp/;
+
+          exports.handler = function(event, context) {
+              var AWS = require('aws-sdk');
+              var Region = event.Region
+              AWS.config.region = Region;
+              var ClusterID = event.Cluster_Id
+              var cloudhsmv2 = new AWS.CloudHSMV2({apiVersion: '2017-04-28'});
+              var ssm = new AWS.SSM({apiVersion: '2014-11-06'});
+              var params = {
+                Filters: {
+                  'clusterIds': [
+                      ClusterID,
+                    ],
+                },
+              };
+              cloudhsmv2.describeClusters(params, function(err, data) {
+                  if (err) console.log(err, err.stack);
+                  else {     console.log();
+                  var csr = data['Clusters'][0]['Certificates']['ClusterCsr']
+                  fs.writeFileSync('/tmp/ClusterCSR.csr', csr);
+            exec('openssl req -x509 -newkey rsa:2048 -keyout /tmp/customerCA.key -out /tmp/customerCA.crt -subj "/C=BR/ST=SaoPaulo/L=SaoPaulo/O=amazon.com.br/OU=aws/CN=solutions-architects" -days 3652 -nodes', (error, stdout, stderr) => {
+              if (error) {
+                throw error;
+              }
+              else {
+                exec('openssl x509 -req -days 3652 -in /tmp/ClusterCSR.csr -CA /tmp/customerCA.crt -CAkey /tmp/customerCA.key -CAcreateserial -out /tmp/CustomerHsmCertificate.crt', (error, stdout, stderr) => {
+                  if (error) {
+                    throw error;
+                  }
+                  else {
+                      var cbytes = fs.readFileSync("/tmp/customerCA.crt");
+                      var cbascii = new Buffer(cbytes).toString('ascii');
+                      var cb64 = new Buffer(cbytes).toString('base64');
+
+                      var kbytes = fs.readFileSync("/tmp/customerCA.key");
+                      var kb64 = new Buffer(kbytes).toString('base64');
+
+                      var cxcrbytes = fs.readFileSync("/tmp/CustomerHsmCertificate.crt");
+                      var cxcrbascii = new Buffer(cxcrbytes).toString('ascii');
+
+                      var params = {
+                          Name: 'signer_customerCACertificate',
+                          Type: 'SecureString',
+                          Value: cb64 ,
+                          Description: 'signer_customerCACertificate',
+                          Overwrite: false
+                        };
+
+                      var params2 = {
+                          Name: '/CodeBuild/CUST_CERTIFICATE',
+                          Type: 'SecureString',
+                          Value: cb64 ,
+                          Description: 'signer_customerCACertificate',
+                          Overwrite: false
+                        };
+
+                        ssm.putParameter(params, function(err, data) {
+                          if (err) console.log(err, err.stack);
+                          else     console.log(data);
+                        });
+
+                        ssm.putParameter(params2, function(err, data) {
+                          if (err) console.log(err, err.stack);
+                          else     console.log(data);
+                        });
+
+                     var params = {
+                          Name: 'signer_customerCAKey',
+                          Type: 'SecureString',
+                          Value: kb64 ,
+                          Description: 'signer_customerCAKey',
+                          Overwrite: false
+                        };
+
+                     var params2 = {
+                          Name: '/CodeBuild/CUSTCA_KEY',
+                          Type: 'SecureString',
+                          Value: kb64 ,
+                          Description: 'signer_customerCAKey',
+                          Overwrite: false
+                        };
+
+                        ssm.putParameter(params, function(err, data) {
+                          if (err) console.log(err, err.stack);
+                          else     console.log(data);
+                        });
+
+                        ssm.putParameter(params2, function(err, data) {
+                          if (err) console.log(err, err.stack);
+                          else     console.log(data);
+                        });
+
+                      var params = {
+                          ClusterId: ClusterID,
+                          SignedCert: cxcrbascii,
+                          TrustAnchor: cbascii
+                        };
+                        cloudhsmv2.initializeCluster(params, function(err, data) {
+                          if (err) console.log(err, err.stack);
+                          else     {
+                            console.log(data)
+                            context.succeed(data['State'])
+                          }
+                        });
+                  }});}});
+              }});
+          }
+      Runtime: nodejs8.10
+      Timeout: '90'
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 8a0d35b9-cde0-4605-b536-2f02079760f1
+  ExecuteStepfunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Runtime: python2.7
+      Handler: index.handler
+      Role: !GetAtt
+        - LambdaExecutionRoleForCloudHSM
+        - Arn
+      Timeout: 50
+      Code:
+        ZipFile: |
+          import boto3, json, traceback, time
+          import cfnresponse
+          import logging
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def handler(event, context):
+              response_data = {}
+              try:
+
+                  client = boto3.client('stepfunctions',region_name=event['ResourceProperties']["StateRegions"])
+                  if event["RequestType"] == "Create" or event["RequestType"] == "Update":
+                      logger.info("Event Body - " + json.dumps(event))
+
+                      SecretsMgrSubnet01 = event['ResourceProperties']['SecretsMgrSubnet01Id']
+                      SG    =   event['ResourceProperties']['SG']
+
+                      executestate = event['ResourceProperties']['ExecuteStateArn']
+                      Region = event['ResourceProperties']["StateRegions"]
+                      StateArn = client.start_execution(
+                          stateMachineArn=executestate,
+                          input="{\"Region\":\"" + Region + "\",\"Subnet1\":\""+ SecretsMgrSubnet01 + "\",\"SG\":\"" +SG+"\"}"
+                          )['executionArn']
+
+                      logger.info("executionArn - " + StateArn)
+                      response_data['executeArn'] = StateArn
+
+                      logger.info("Response - " + json.dumps(response_data))
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data, StateArn)
+
+                  elif event["RequestType"] == "Delete":
+                      logger.info("Event Body - " + json.dumps(event))
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS,{})
+                  else:
+                      logger.info("Event Body - " + json.dumps(event))
+                      cfnresponse.send(event, context, cfnresponse.FAILED,{})
+              except Exception as e:
+                  msg = 'See details in CloudWatch Log Stream: ' + context.log_stream_name
+                  response_data['exception'] = str(e)[0:255] + '... ' + msg
+                  cfnresponse.send(event, context, cfnresponse.FAILED, response_data)
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 69adac9e-224f-4b25-86f5-d9f95ecc94a0
+  ExecuteStepCustom:
+    Type: 'Custom::ExecuteStepCustom'
+    Properties:
+      ServiceToken: !GetAtt
+        - ExecuteStepfunction
+        - Arn
+      StateRegions: !Ref 'AWS::Region'
+      ExecuteStateArn: !Ref LaunchCloudHSMCluster
+      SecretsMgrSubnet01Id: !Ref PrivateSubnet
+      SG: !Ref FargateContainerSecurityGroup
+    DependsOn:
+      - NATGateway
+      - PublicAccessRoute
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 71ac8dc3-814c-4e61-9d50-4d489696c9ba
+  StatesExecutionRoleForCloudHSM:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - states.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: StatesExecutionPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'lambda:InvokeFunction'
+                Resource: '*'
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: b3a8caed-fbf7-48cb-b6d2-aefa1b850215
+  LaunchCloudHSMCluster:
+    Type: 'AWS::StepFunctions::StateMachine'
+    Properties:
+      DefinitionString: !Sub |-
+        {
+          "Comment": "Creates a CloudHSM and initializes it",
+          "StartAt": "CreateCluster",
+          "States": {
+            "CreateCluster": {
+              "Type": "Task",
+              "Resource": "${CreateCluster.Arn}",
+              "Next": "wait_cluster_seconds",
+              "ResultPath": "$.Cluster_Id"
+            },
+            "wait_cluster_seconds": {
+              "Type": "Wait",
+              "Seconds": 30,
+              "Next": "ClusterStatus"
+            },
+            "ClusterStatus": {
+              "Type": "Task",
+              "Resource": "${DescribeClusters.Arn}",
+              "Next": "ClusterReady?",
+              "ResultPath": "$.Cluster_Output"
+            },
+            "ClusterReady?": {
+              "Type": "Choice",
+              "Choices": [{
+                "Variable": "$.Cluster_Output.Cluster_Status",
+                "StringEquals": "UNINITIALIZED",
+                "Next": "CreateHSM"
+              }, {
+                "Variable": "$.Cluster_Output.Cluster_Status",
+                "StringEquals": "INITIALIZED",
+                "Next": "SuccessState"
+              },{
+                "Variable": "$.Cluster_Output.Cluster_Status",
+                "StringEquals": "DEGRADED",
+                "Next": "Job Failed"
+              }
+            ],
+              "Default": "wait_cluster_seconds"
+            },
+            "Job Failed": {
+              "Type": "Fail",
+              "Cause": "Create Cluster Failed",
+              "Error": "Cluster failed to start in a healthy state"
+            },
+            "CreateHSM": {
+              "Type": "Task",
+              "Resource": "${CreateHSM.Arn}",
+              "Next": "wait_hsm_seconds",
+              "ResultPath": "$.Cluster_Output.Hsm_Status"
+            },
+            "wait_hsm_seconds": {
+              "Type": "Wait",
+              "Seconds": 30,
+              "Next": "HsmStatus"
+            },
+            "HsmStatus": {
+              "Type": "Task",
+              "Resource": "${DescribeClusters.Arn}",
+              "Next": "HsmActive?",
+              "ResultPath": "$.Cluster_Output"
+            },
+                "HsmActive?": {
+              "Type": "Choice",
+              "Choices": [{
+                "Variable": "$.Cluster_Output.Hsm_Status",
+                "StringEquals": "ACTIVE",
+                "Next": "InitializeCluster"
+              }, {
+                "Variable": "$.Cluster_Output.Hsm_Status",
+                "StringEquals": "DEGRADED",
+                "Next": "Job Failed"
+              }],
+              "Default": "wait_hsm_seconds"
+            },
+                "InitializeCluster": {
+              "Type": "Task",
+              "Resource": "${InitializeCluster.Arn}",
+              "Next": "wait_cluster_seconds",
+              "ResultPath": "$.Cluster_Output.Cluster_Status"
+            },
+            "SuccessState": {
+                "Type": "Succeed"
+              }
+          }
+        }
+      RoleArn: !GetAtt StatesExecutionRoleForCloudHSM.Arn
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 4625a8db-a165-444e-a981-f19be59e5f18
+Outputs:
+  VPCId:
+    Description: The ID of the VPC that this stack is deployed in
+    Value: !Ref VPC
+    Export:
+      Name: SignerVPCId
+  PublicSubnetOne:
+    Description: Public subnet one
+    Value: !Ref PublicSubnetOne
+    Export:
+      Name: SignerPublicSubnetOne
+  PrivateSubnet:
+    Description: Private Subnet
+    Value: !Ref PrivateSubnet
+    Export:
+      Name: SignerPrivateSubnet
+  PublicSubnetOneAz:
+    Description: Public subnet one AZ
+    Value: !GetAtt PublicSubnetOne.AvailabilityZone
+    Export:
+      Name: SignerPublicSubnetOneAz          
+  PrivateSubnetAz:
+    Description: Private Subnet AZ
+    Value: !GetAtt PrivateSubnet.AvailabilityZone
+    Export:
+      Name: SignerPrivateSubnetAz 
+  PublicSubnetTwo: 
+    Description: Public subnet two 
+    Value: !Ref PublicSubnetTwo 
+    Export: 
+      Name: SignerPublicSubnetTwo 
+  PublicSubnetTwoAz: 
+    Description: Public subnet two AZ 
+    Value: !GetAtt PublicSubnetTwo.AvailabilityZone 
+    Export: 
+      Name: PublicSubnetTwoAz            
+  FargateContainerSecurityGroup:
+    Description: A security group used to allow Fargate containers to receive traffic
+    Value: !Ref FargateContainerSecurityGroup
+    Export:
+      Name: SignerFargateContainerSecurityGroup
+  executionARN:
+    Description: The ARN of the execution
+    Value: !GetAtt
+      - ExecuteStepCustom
+      - executeArn      
+Metadata:
+  'AWS::CloudFormation::Designer':
+    bc4e86af-eba9-4855-a66a-4d5c94e6b04a:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 300
+        'y': 750
+      z: 1
+      embeds: []
+    3837cbcf-4d68-48be-bc9a-9d1fe7d62b2f:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 420
+        'y': 750
+      z: 1
+      embeds: []
+    ff1b3762-07b2-470d-88ac-dcf1f46c5bb4:
+      size:
+        width: 990
+        height: 600
+      position:
+        x: -170
+        'y': 80
+      z: 1
+      embeds:
+        - f15849db-c6c8-4f71-8e5d-072c46d98c74
+        - 916b51ff-d56a-4fe4-85db-417344037c3e
+        - 15e77198-7be1-4800-bde2-9fbb5dfe30dc
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 5cfcccf2-3438-4be3-9271-2993826f1af7
+        - b4fc91b4-55fd-426d-a4bd-3a52961a995f
+        - ad635758-84b6-45bc-8dac-9b955595f2d3
+        - bdf5413a-9d2e-4ac3-96db-457c7cd67da2
+        - 9e102f05-102f-4fef-b5e8-705bc4aaf90a
+    f15849db-c6c8-4f71-8e5d-072c46d98c74:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: -140
+        'y': 440
+      z: 2
+      parent: ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+      embeds: []
+      iscontainedinside:
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+    916b51ff-d56a-4fe4-85db-417344037c3e:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: -20
+        'y': 440
+      z: 2
+      parent: ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+      embeds: []
+      iscontainedinside:
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+    15e77198-7be1-4800-bde2-9fbb5dfe30dc:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 370
+        'y': 140
+      z: 2
+      parent: ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+      embeds: []
+      iscontainedinside:
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+    693bfb2c-0477-468b-aacc-6eb9e26b9fc1:
+      source:
+        id: 15e77198-7be1-4800-bde2-9fbb5dfe30dc
+      target:
+        id: 15e77198-7be1-4800-bde2-9fbb5dfe30dc
+      z: 2
+    a05c3c07-4cb0-4668-b1d5-339a6f58e82e:
+      source:
+        id: 916b51ff-d56a-4fe4-85db-417344037c3e
+      target:
+        id: 15e77198-7be1-4800-bde2-9fbb5dfe30dc
+      z: 2
+    857c6b84-8319-406f-8f39-d23f02b0576f:
+      size:
+        width: 240
+        height: 240
+      position:
+        x: -140
+        'y': 140
+      z: 2
+      parent: ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+      embeds: []
+      iscontainedinside:
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+    d1516997-cc1e-4d41-ac4a-9d756f9dfa71:
+      source:
+        id: ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+      target:
+        id: 3837cbcf-4d68-48be-bc9a-9d1fe7d62b2f
+      z: 1
+    48950cdd-dbe4-4611-996d-2af3cce33d27:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: -110
+        'y': 170
+      z: 3
+      parent: 5cfcccf2-3438-4be3-9271-2993826f1af7
+      embeds: []
+      isassociatedwith:
+        - 3837cbcf-4d68-48be-bc9a-9d1fe7d62b2f
+      iscontainedinside:
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 5cfcccf2-3438-4be3-9271-2993826f1af7
+      dependson:
+        - d1516997-cc1e-4d41-ac4a-9d756f9dfa71
+    ad635758-84b6-45bc-8dac-9b955595f2d3:
+      size:
+        width: 150
+        height: 150
+      position:
+        x: 160
+        'y': 350
+      z: 2
+      parent: ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+      embeds: []
+      iscontainedinside:
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+    776dc5b7-ee14-450a-9336-7750acbfa484:
+      source:
+        id: 857c6b84-8319-406f-8f39-d23f02b0576f
+      target:
+        id: ad635758-84b6-45bc-8dac-9b955595f2d3
+      z: 2
+    bdf5413a-9d2e-4ac3-96db-457c7cd67da2:
+      size:
+        width: 150
+        height: 150
+      position:
+        x: 160
+        'y': 140
+      z: 2
+      parent: ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+      embeds: []
+      iscontainedinside:
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+    03826ee0-8d66-457e-8202-a52cfb02db77:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 540
+        'y': 750
+      z: 1
+      embeds: []
+      isassociatedwith:
+        - 916b51ff-d56a-4fe4-85db-417344037c3e
+      iscontainedinside:
+        - bdf5413a-9d2e-4ac3-96db-457c7cd67da2
+        - ad635758-84b6-45bc-8dac-9b955595f2d3
+    47ab314d-807d-413a-b859-f8c0776e26db:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 660
+        'y': 750
+      z: 1
+      embeds: []
+      dependson:
+        - 03826ee0-8d66-457e-8202-a52cfb02db77
+    565851de-a56b-4ef3-b8ba-00c2e4610bb0:
+      source:
+        id: 857c6b84-8319-406f-8f39-d23f02b0576f
+      target:
+        id: bdf5413a-9d2e-4ac3-96db-457c7cd67da2
+      z: 2
+    b4fc91b4-55fd-426d-a4bd-3a52961a995f:
+      size:
+        width: 150
+        height: 150
+      position:
+        x: 400
+        'y': 350
+      z: 2
+      parent: ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+      embeds: []
+      iscontainedinside:
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+    9e102f05-102f-4fef-b5e8-705bc4aaf90a:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 460
+        'y': 140
+      z: 2
+      parent: ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+      embeds: []
+      iscontainedinside:
+        - bdf5413a-9d2e-4ac3-96db-457c7cd67da2
+    5cfcccf2-3438-4be3-9271-2993826f1af7:
+      size:
+        width: 240
+        height: 240
+      position:
+        x: -140
+        'y': 140
+      z: 2
+      parent: ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+      embeds:
+        - a76b0d86-228e-42f4-a0a2-3b03a271c8c1
+        - 48950cdd-dbe4-4611-996d-2af3cce33d27
+      iscontainedinside:
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+    e80f378e-e009-404c-8dc1-66ea8922c2ac:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 1080
+        'y': 90
+      z: 1
+      embeds: []
+      dependson:
+        - d1516997-cc1e-4d41-ac4a-9d756f9dfa71
+    f8d39cec-0141-4847-b55b-019ac01b1f32:
+      source:
+        id: 5cfcccf2-3438-4be3-9271-2993826f1af7
+      target:
+        id: b4fc91b4-55fd-426d-a4bd-3a52961a995f
+    a76b0d86-228e-42f4-a0a2-3b03a271c8c1:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: -110
+        'y': 200
+      z: 3
+      parent: 5cfcccf2-3438-4be3-9271-2993826f1af7
+      embeds: []
+      isassociatedwith:
+        - 9e102f05-102f-4fef-b5e8-705bc4aaf90a
+      iscontainedinside:
+        - 5cfcccf2-3438-4be3-9271-2993826f1af7
+      dependson:
+        - d1516997-cc1e-4d41-ac4a-9d756f9dfa71
+Parameters:
+  PrivateSubnetAZ:
+    Type: String
+    Default: AZ1
+    AllowedValues:
+      - AZ1
+      - AZ2
+      - AZ3
+    Description: >-
+      The Availability Zone for the Private Subnet where the CloudHSM is going 
+      to be connected to
+  CIDRNetworkHSM:
+    Type: String
+    Default: 172.30.0.0/16
+    Description: >-
+      The network CIDR of the HSM Network where this public subnet will be
+      created
+  CIDRPublicSubnetHSM:
+    Type: String
+    Default: 172.30.255.0/24
+    Description: >-
+      The CIDR of the first public subnet where the container and ALB will be
+      running
+  CIDRPublicSubnet2HSM: 
+    Type: String 
+    Default: 172.30.248.0/24 
+    Description: >- 
+      The CIDR of the second public subnet where the container and ALB will be 
+      running 
+  CIDRPrivateSubnetHSM:
+    Type: String
+    Default: 172.30.240.0/24
+    Description: Private subnet where Code Build will run
+Mappings:
+  RegionMap:
+    us-east-1:
+      AZ1: "us-east-1a"
+      AZ2: "us-east-1b"
+      AZ3: "us-east-1c"
+    us-east-2:
+      AZ1: "us-east-2a"
+      AZ2: "us-east-2b"
+      AZ3: "us-east-2c"
+    eu-west-2:
+      AZ1: "us-west-2a"
+      AZ2: "us-west-2b"
+      AZ3: "us-west-2c"
