@@ -1,6 +1,6 @@
 ![workshop logo](https://github.com/ldecaro/xmlsigner/blob/master/images/hsm-fargate.png)
 
-# Signer Microservice - Digital Invoices Signing
+# Signer Microservice - Digital Invoice Signing
 
 A microservice for signing digital invoices created using the XML format. This microservice is also able to digitaly sign any XML document. In payment industries, more specifically in Brazil, law requires all invoices to be created in digital format (XML) and to be digitally signed before sent to customers. An example is the NF-e or Nota Fiscal Eletrônica.
 
@@ -54,9 +54,9 @@ This script creates a Step Function with name staring with **LaunchCloudHSMClust
   
 |Deploy | Region |
 |:---:|:---:|
-|[![launch stach](/images/launch_stack_button.png)][us-east-1-container-signer] | US East (N. Virginia)|
-|[![launch stach](/images/launch_stack_button.png)][us-east-2-container-signer] | US East (Ohio)|
-|[![launch stach](/images/launch_stack_button.png)][us-west-2-container-signer] | US West (Oregon)|
+|[![launch stack](/images/launch_stack_button.png)][us-east-1-container-signer] | US East (N. Virginia)|
+|[![launch stack](/images/launch_stack_button.png)][us-east-2-container-signer] | US East (Ohio)|
+|[![launch stack](/images/launch_stack_button.png)][us-west-2-container-signer] | US West (Oregon)|
 
 
 [Troubleshoot](#Troubleshooting-Container-Build)
@@ -74,9 +74,9 @@ After you run the CloudFormation script you should use the AWS Console and look 
 
 |Deploy | Region |
 |:---:|:---:|
-|[![launch stach](/images/launch_stack_button.png)][us-east-1-ecs-signer] | US East (N. Virginia)|
-|[![launch stach](/images/launch_stack_button.png)][us-east-2-ecs-signer] | US East (Ohio)|
-|[![launch stach](/images/launch_stack_button.png)][us-west-2-ecs-signer] | US West (Oregon)|
+|[![launch stack](/images/launch_stack_button.png)][us-east-1-ecs-signer] | US East (N. Virginia)|
+|[![launch stack](/images/launch_stack_button.png)][us-east-2-ecs-signer] | US East (Ohio)|
+|[![launch stack](/images/launch_stack_button.png)][us-west-2-ecs-signer] | US West (Oregon)|
 
 Just follow the steps and wait for the script to finish executing. It is ready for use!
 
@@ -103,30 +103,36 @@ Signing process may be executed using a self signed certificate or not. Everythi
 You choose whether to sign embedding a X.509 certificate into your invoice or not.
 
  
- Inside the folder ** run ** of this project there is a file name **certdata.json** and you can use it to define properties of your self signed certificate when creating keys. Please find below the commands you should use to operate the **xmlsigner** container:
+ Inside the folder **run** of this project there is a file name **certdata.json** and you can use it to define properties of your self signed certificate when creating keys. Please find below the commands you should use to operate the **xmlsigner** container:
  
- ### Listing existing keys:
+### Store the service URL in an environment variable:
+(remove the // at the end of the url)
+```
+URL=<alb-url>
+```
+
+### List existing keys:
  
 ```
- $ curl <alb-url>/xml/listKeys
+ $ curl $URL/xml/listKeys
 ```
 
 ### Create keys:
 
 ```
- $ curl --data "@run/certdata.json" <alb-url>/xml/create/<my-key-label> -X POST -H "Content-Type: text/plain"
+ $ curl --data "@run/certdata.json" $URL/xml/create/<my-key-label> -X POST -H "Content-Type: text/plain"
 ```
 
 ### Sign XML Document
 
 ```
- $ curl --data "@run/sample.xml" <alb-url>/xml/sign/<my-key-label> -X POST -H "Content-Type: application/xml"
+ $ curl --data "@run/sample.xml" $URL/xml/sign/<my-key-label> -X POST -H "Content-Type: application/xml"
 ```
 
 ### Sign and Embed Certificate
 
 ```
- $ curl --data "@run/sample.xml" <alb-url>/xml/sign-cert/<my-key-label> -X POST -H "Content-Type: application/xml"
+ $ curl --data "@run/sample.xml" $URL/xml/sign-cert/<my-key-label> -X POST -H "Content-Type: application/xml"
 ```
 
 ### Validate Signed Document
